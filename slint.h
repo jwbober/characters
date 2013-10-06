@@ -197,17 +197,41 @@ void factors(long n, std::vector<long> * primes, std::vector<int> * exponents) {
 
 long primitive_root(long n) {
     //
-    // return the smallest primitive root mod n
-    // we make no check that there is actually a primitive root,
-    // and if there is not we just try everything < n, and return
-    // -1 when we don't find anything.
-    
+    // Return a primitive root mod n.
+    //
+    // If n == 1 or 2, returns 1
+    // If n == 4, returns 3
+    // If n is an odd prime power p^e with p < 3037000499, returns
+    // the smallest primitive root mod p which is a primitive
+    // root for all e.
+    // If n in an odd prime larger than 3037000499, returns the
+    // smallest primitive root mod n
+    //
     if(n < 2) {
         return n;
     }
     if(n == 2)
         return 1;
-    long phi = euler_phi(n);
+    if(n == 4)
+        return 3;
+    std::vector<long> prime_factors;
+    factors(n, &prime_factors, NULL);
+    if(prime_factors.size() > 1)
+        return -1;
+
+    long p = prime_factors[0];
+    if(p == 2)
+        return -1;
+    long p2;
+    if(p > 3037000499) {
+        p2 = p; // when p is too large, we still compute
+                // a primitive root, but we don't verify
+                // that it is a primitive root for all powers of p
+    }
+    else {
+        p2 = p*p;
+    }
+    long phi = p - 1;
     std::vector<long> phi_prime_factors;
     factors(phi, &phi_prime_factors, NULL);
     long a = 1;
@@ -226,7 +250,13 @@ long primitive_root(long n) {
             }
         }
         if(root) {
-            return a;
+            if(p == p2)
+                return a;
+            else {
+                long x = PowerMod(a, p, p2);
+                if(x != a)
+                    return a;
+            }
         }
     }
     return -1;
@@ -276,6 +306,18 @@ bool is_prime(long q) {
         else
             return false;
     }
+}
+
+long next_prime(long n) {
+    if(n < 2)
+        return 2;
+    if(n == 2)
+        return 3;
+    n += 2;
+    while(!is_prime(n)) {
+        n += 2;
+    }
+    return n;
 }
 
 long odd_part(long n) {
