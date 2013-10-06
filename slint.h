@@ -244,7 +244,7 @@ long primitive_root(long n) {
                 i != phi_prime_factors.end();
                 i++     ) {
             //std::cout << p << " " << *i << std::endl;
-            if(PowerMod(a, phi/(*i), n) == 1) {
+            if(PowerMod(a, phi/(*i), p) == 1) {
                 root = false;
                 break;
             }

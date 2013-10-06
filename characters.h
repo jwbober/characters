@@ -74,6 +74,15 @@ public:
  
     void DFTsum(std::complex<double> * out, std::complex<double> * in);
 
+    bool is_coprime_to_q(long n) {
+        if(q_even > 1 && n % 2 == 0)
+            return false;
+        else if(q_odd == 1)
+            return true;
+        else
+            return A[n % q_odd][0] != -1;
+    }
+
     DirichletGroup(long q_) : q(q_) {
         q_even = 1;
         q_odd = q;
@@ -138,14 +147,14 @@ public:
             for(long n = 0; n < q_even/4; n++) {
                 zeta_powers_even[n] = e(4*n/double(q_even));
             }
-            long pow_three = 1;
+            long pow_five = 1;
             for(long e = 0; e < q_even/4; e++) {
-                B[pow_three] = e;
-                B[pow_three - 1] = 1;
-                B[q_even - pow_three] = e;
-                B[q_even - pow_three - 1] = -1;
-                pow_three *= 3;
-                pow_three %= q_even;
+                B[pow_five] = e;
+                B[pow_five - 1] = 1;
+                B[q_even - pow_five] = e;
+                B[q_even - pow_five - 1] = -1;
+                pow_five *= 5;
+                pow_five %= q_even;
             }
         }
 
@@ -439,18 +448,15 @@ bool DirichletCharacter::is_primitive_at_two() {
     if(q_even == 1) return true;
     else if(q_even == 2) return false;
     else if(q_even == 4) return n == 3;
-    else if(q_even == 8) {
-        if(B[n] % 2 == 1 && B[n-1] == 1) return true;
-        else if(B[n] % 2 == 0 && B[n-1] == -1) return true;
-        else return false;
+    else {
+        n = n % 8;
+        if(n == 3) return true;
+        return n == 5;
     }
-    else return B[n] % 2 == 1;
 }
 
 bool DirichletCharacter::is_even() {
     // return whether or not this character is even
-    //
-
     //
     // We just figure out if the character is even by evaluating it at q-1.
     // The evaluation isn't going to be exact, but since the number is just
