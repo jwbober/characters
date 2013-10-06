@@ -3,6 +3,7 @@
 #include <complex>
 #include <cmath>
 #include <vector>
+#include <fftw3.h>
 
 using namespace std;
 
@@ -67,9 +68,12 @@ public:
     long phi_q_odd;
     long phi_q;     // phi(q)
 
+
     std::complex<double> * zeta_powers_odd;     // zeta_powers[n] == e(n/phi(q))
     std::complex<double> * zeta_powers_even;     // zeta_powers[n] == e(n/phi(q))
-    
+ 
+    void DFTsum(std::complex<double> * out, std::complex<double> * in);
+
     DirichletGroup(long q_) : q(q_) {
         q_even = 1;
         q_odd = q;
@@ -86,6 +90,7 @@ public:
             factors(q_odd, primes, exponents);
             k = primes->size();
             phi_q_odd = euler_phi(q_odd);
+            phi_q = euler_phi(q);
             
             PHI = new long[k];
             A = new long*[q_odd];
@@ -216,23 +221,117 @@ public:
         return odd_part * even_part;
     }
 
-    //DirichletCharacter character(long m) {
-    //    return DirichletCharacter(q, m, k, A, PHI, phi_q, zeta_powers);
-    //}
     DirichletCharacter character(long m) {
         return DirichletCharacter(this, m);
     }
 
-    //DirichletCharacter * character(long n) {
+    void DFTsum_direct (complex<double> * out, complex<double> * in) {
         //
-        // return the character chi for which
-        // chi(a) == e(n/(q-1))
+        // Set out[n] to the sum
         //
+        //     sum_{k=1}^{q-1} in[k] chi(n,k)
+        //
+        // (computed naively, for testing purposes, or because
+        //  something better hasn't been implemented yet.)
 
-    //    return new DirichletCharacter(q, n, zeta_powers, power_table);
-    //}
-
+        
+        for(int n = 0; n < q; n++) {
+            complex<double> S = 0.0;
+            for(int k = 0; k < q; k++) {
+                S += in[k] * chi(n,k);
+            }
+            out[n] = S;
+        }
+    }
 };
+
+void DirichletGroup::DFTsum (complex<double> * out, complex<double> * in) {
+    // The easiest case is when q is an odd prime power.
+    if(q_even == 1 && k == 1) {
+        // the ordering of the character labels is not very FFT
+        // friendly, so most of the code here is going to be
+        // just to get things in the right order
+        
+        fftw_complex *a, *X;
+        a = (fftw_complex*) fftw_malloc(sizeof(fftw_complex)*(phi_q));
+        X = (fftw_complex*) fftw_malloc(sizeof(fftw_complex)*(phi_q));
+        
+        fftw_plan plan = fftw_plan_dft_1d(phi_q, a, X,
+                                          FFTW_BACKWARD, FFTW_ESTIMATE);
+
+        long g = generators->at(0);
+        long z = 1;
+
+        // translate in one direction
+        for(int k = 0; k < phi_q; k++) {
+            //a[k] = in[z];
+            a[k][0] = in[z].real();
+            a[k][1] = in[z].imag();
+            z = z * g;
+            z = z % q;
+        }
+
+        fftw_execute(plan);
+
+        // translate back
+        z = 1;
+        for(int k = 0; k < phi_q; k++) {
+            out[z] = complex<double>(X[k][0], X[k][1]);
+            z = z * g;
+            z = z % q;
+        }
+
+        delete [] a;
+        delete [] X;
+    }
+    else if(q_even == 1) {
+        complex<double> *a, *X;
+        a = new complex<double>[phi_q];
+        X = new complex<double>[phi_q];
+
+        int * phi = new int[k];
+        for(int n = 0; n < k; n++) {
+            long p = primes->at(n);
+            long e = exponents->at(n);
+            phi[n] = (p - 1)*pow(p, e-1);
+        }
+
+        int * translation = new int[q];
+        //          m == g[j]**A[m][k] mod p[j]**e[j]
+        for(int n = 0; n < q; n++) {
+            if(A[n][0] == -1) {
+                translation[n] = -1;
+            }
+            else {
+                int index = 0;
+                for(int j = 0; j < k; j++) {
+                    index += A[n][j];
+                    if(j < k-1) index *= phi[j+1];
+                }
+                translation[n] = index;
+            }
+        }
+
+        for(int n = 0; n < q; n++) {
+            if(translation[n] == -1) continue;
+            else a[translation[n]] = in[n];
+        }
+        
+        fftw_plan plan = fftw_plan_dft(k, phi, (fftw_complex *)a,
+                                               (fftw_complex *)X,
+                                       FFTW_BACKWARD, FFTW_ESTIMATE);
+        
+        fftw_execute(plan);
+
+        for(int n = 0; n < q; n++) {
+            if(translation[n] == -1) continue;
+            else out[n] = X[translation[n]];
+        }
+
+        delete [] a;
+        delete [] X;
+    }
+}
 
 
 
