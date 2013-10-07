@@ -26,6 +26,7 @@ public:
     ~DirichletCharacter() {}
     long exponent(long n);
     complex<double> max(long* index);
+    complex<double> sum(long end);
     std::complex<double> value(long n);
     bool is_primitive();
     bool is_primitive_at_two();
@@ -91,6 +92,9 @@ public:
             q_even *= 2;
         }
 
+        k = 0;
+        phi_q = euler_phi(q);
+
         if(q_odd > 1) {
             primes = new std::vector<long>();
             exponents = new std::vector<int>();
@@ -99,7 +103,6 @@ public:
             factors(q_odd, primes, exponents);
             k = primes->size();
             phi_q_odd = euler_phi(q_odd);
-            phi_q = euler_phi(q);
             
             PHI = new long[k];
             A = new long*[q_odd];
@@ -188,7 +191,7 @@ public:
         }
         if(x >= phi_q_odd) 
             x = x % phi_q_odd;
-
+        
         return x;
     }
     
@@ -215,9 +218,9 @@ public:
                 even_part = zeta_powers_even[chi_even_exponent(m % q_even, n % q_even)];
             }
         }
-        if(m > q_odd)
+        if(m >= q_odd)
             m %= q_odd;
-        if(n > q_odd);
+        if(n >= q_odd);
             n %= q_odd;
         if(q_odd > 1) {
             if(A[m][0] == -1 || A[n][0] == -1)
@@ -252,9 +255,24 @@ public:
             out[n] = S;
         }
     }
+
+    void all_sums(complex<double> * out, long end) {
+        complex<double> * dft_in = new complex<double>[q]();
+        for(long k = 0; k <= end; k++) {
+            dft_in[k] = 1.0;
+        }
+        DFTsum(out, dft_in);
+        delete [] dft_in;
+    }
 };
 
 void DirichletGroup::DFTsum (complex<double> * out, complex<double> * in) {
+    if(q < 4) {
+        // just don't want to deal with problems with 2 right now.
+        DFTsum_direct(out, in);
+        return;
+    }
+
     // The easiest case is when q is an odd prime power.
     if(q_even == 1 && k == 1) {
         // the ordering of the character labels is not very FFT
@@ -284,14 +302,15 @@ void DirichletGroup::DFTsum (complex<double> * out, complex<double> * in) {
 
         // translate back
         z = 1;
+        out[0] = 0.0;
         for(int k = 0; k < phi_q; k++) {
             out[z] = complex<double>(X[k][0], X[k][1]);
             z = z * g;
             z = z % q;
         }
-
-        delete [] a;
-        delete [] X;
+        fftw_destroy_plan(plan);
+        fftw_free(a);
+        fftw_free(X);
     }
     else if(q_even == 1) {
         complex<double> *a, *X;
@@ -333,17 +352,177 @@ void DirichletGroup::DFTsum (complex<double> * out, complex<double> * in) {
         fftw_execute(plan);
 
         for(int n = 0; n < q; n++) {
+            if(translation[n] == -1) out[n] = 0.0;
+            else out[n] = X[translation[n]];
+        }
+
+        fftw_destroy_plan(plan);
+        delete [] translation;
+        delete [] phi;
+        delete [] a;
+        delete [] X;
+    }
+    else if(q_even == 2) {
+        complex<double> *a, *X;
+        a = new complex<double>[phi_q];
+        X = new complex<double>[phi_q];
+
+        int * phi = new int[k];
+        for(int n = 0; n < k; n++) {
+            long p = primes->at(n);
+            long e = exponents->at(n);
+            phi[n] = (p - 1)*pow(p, e-1);
+        }
+
+        int * translation = new int[q];
+        //          m == g[j]**A[m][k] mod p[j]**e[j]
+        for(int n = 0; n < q; n++) {
+            if(n % 2 == 0 || A[n % q_odd][0] == -1) {
+                translation[n] = -1;
+            }
+            else {
+                int index = 0;
+                for(int j = 0; j < k; j++) {
+                    index += A[n % q_odd][j];
+                    if(j < k-1) index *= phi[j+1];
+                }
+                translation[n] = index;
+            }
+        }
+
+        for(int n = 0; n < q; n++) {
+            if(translation[n] == -1) continue;
+            else a[translation[n]] = in[n];
+        }
+        
+        fftw_plan plan = fftw_plan_dft(k, phi, (fftw_complex *)a,
+                                               (fftw_complex *)X,
+                                       FFTW_BACKWARD, FFTW_ESTIMATE);
+        
+        fftw_execute(plan);
+
+        for(int n = 0; n < q; n++) {
+            if(translation[n] == -1) out[n] = 0.0;
+            else out[n] = X[translation[n]];
+        }
+
+        fftw_destroy_plan(plan);
+        delete [] translation;
+        delete [] phi;
+        delete [] a;
+        delete [] X;
+    }
+    else if(q_even == 4) {
+        complex<double> *a, *X;
+        a = new complex<double>[phi_q];
+        X = new complex<double>[phi_q];
+
+        int * phi = new int[k+1];
+        phi[0] = 2;
+        for(int n = 0; n < k; n++) {
+            long p = primes->at(n);
+            long e = exponents->at(n);
+            phi[n+1] = (p - 1)*pow(p, e-1);
+        }
+
+        int * translation = new int[q];
+        //          m == g[j]**A[m][k] mod p[j]**e[j]
+        for(int n = 0; n < q; n++) {
+            if(n % 2 == 0 || (q_odd > 1 && A[n % q_odd][0] == -1)) {
+                translation[n] = -1;
+            }
+            else {
+                int index = (n % 4 == 3);
+                if(k > 0) index *= phi[1];
+                for(int j = 0; j < k; j++) {
+                    index += A[n % q_odd][j];
+                    if(j < k-1) index *= phi[j+2];
+                }
+                translation[n] = index;
+            }
+        }
+
+        for(int n = 0; n < q; n++) {
+            if(translation[n] == -1) continue;
+            else a[translation[n]] = in[n];
+        }
+
+        fftw_plan plan = fftw_plan_dft(k+1, phi, (fftw_complex *)a,
+                                                 (fftw_complex *)X,
+                                                 FFTW_BACKWARD, FFTW_ESTIMATE);
+        
+        fftw_execute(plan);
+
+        for(int n = 0; n < q; n++) {
+            if(translation[n] == -1) out[n] = 0.0;
+            else out[n] = X[translation[n]];
+        }
+        
+        fftw_destroy_plan(plan);
+        delete [] translation;
+        delete [] phi;
+        delete [] a;
+        delete [] X;
+    }
+    else { // q_even > 4
+        complex<double> *a, *X;
+        a = new complex<double>[phi_q];
+        X = new complex<double>[phi_q];
+
+        int * phi = new int[k+2];
+        phi[0] = 2;
+        phi[1] = q_even/4;
+        for(int n = 0; n < k; n++) {
+            long p = primes->at(n);
+            long e = exponents->at(n);
+            phi[n+2] = (p - 1)*pow(p, e-1);
+        }
+
+
+        int * translation = new int[q];
+        //          m == g[j]**A[m][k] mod p[j]**e[j]
+        for(int n = 0; n < q; n++) {
+            if(n % 2 == 0 || (q_odd > 1 && A[n % q_odd][0] == -1)) {
+                translation[n] = -1;
+            }
+            else {
+                int index = (n % 4 == 3) * phi[1];
+                index += B[n % q_even];
+                if(k > 0)
+                    index *= phi[2];
+                for(int j = 0; j < k; j++) {
+                    index += A[n % q_odd][j];
+                    if(j < k-1) index *= phi[j+3];
+                }
+                translation[n] = index;
+            }
+        }
+
+        for(int n = 0; n < q; n++) {
+            if(translation[n] == -1) continue;
+            else a[translation[n]] = in[n];
+        }
+
+
+        fftw_plan plan = fftw_plan_dft(k+2, phi, (fftw_complex *)a,
+                                                 (fftw_complex *)X,
+                                                 FFTW_BACKWARD, FFTW_ESTIMATE);
+        
+        fftw_execute(plan);
+
+        for(int n = 0; n < q; n++) {
             if(translation[n] == -1) continue;
             else out[n] = X[translation[n]];
         }
 
+        fftw_destroy_plan(plan);
+        delete [] translation;
+        delete [] phi;
         delete [] a;
         delete [] X;
     }
+
 }
-
-
-
 
 DirichletCharacter::DirichletCharacter(DirichletGroup * parent_, long m_) : parent(parent_), m(m_) {
         //
@@ -397,6 +576,16 @@ complex<double> DirichletCharacter::max(long * index) {
         *index = max_location;
     }
     return current_max;
+}
+
+complex<double> DirichletCharacter::sum(long end) {
+    std::complex<double> S(0,0);
+
+    for(long n = 0; n <= end; n++) {
+        S = S + value(n);
+    }
+
+    return S;
 }
 
 long DirichletCharacter::exponent(long n) {

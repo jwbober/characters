@@ -313,7 +313,10 @@ long next_prime(long n) {
         return 2;
     if(n == 2)
         return 3;
-    n += 2;
+    if(n % 2 == 0)
+        n += 1;
+    else
+        n += 2;
     while(!is_prime(n)) {
         n += 2;
     }
