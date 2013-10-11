@@ -94,6 +94,7 @@ public:
 
         k = 0;
         phi_q = euler_phi(q);
+        dft_translation_built = false;
 
         if(q_odd > 1) {
             primes = new std::vector<long>();
@@ -178,6 +179,11 @@ public:
         if(q_even > 4) {
             delete [] B;
             delete [] zeta_powers_even;
+        }
+
+        if(dft_translation_built) {
+            delete [] dft_translation;
+            delete [] dft_lengths;
         }
     }
 
@@ -264,6 +270,60 @@ public:
         DFTsum(out, dft_in);
         delete [] dft_in;
     }
+
+    int * dft_translation;
+    int * dft_lengths;
+    int dft_dimension;
+    bool dft_translation_built;
+
+    void build_dft_translation() {
+        if(dft_translation_built) return;
+
+        int even_dimension;
+        if(q_even <= 2)      even_dimension = 0;
+        else if(q_even == 4) even_dimension = 1;
+        else                 even_dimension = 2;
+
+        dft_dimension = k + even_dimension;
+        dft_lengths = new int[dft_dimension];
+        
+        if(even_dimension >= 1)
+            dft_lengths[0] = 2;
+        if(even_dimension == 2)
+            dft_lengths[1] = q_even/4;
+
+        for(int n = 0; n < k; n++) {
+            long p = primes->at(n);
+            long e = exponents->at(n);
+            dft_lengths[n+even_dimension] = (p - 1)*pow(p, e-1);
+        }
+
+        dft_translation = new int[q];
+        //          m == g[j]**A[m][k] mod p[j]**e[j]
+        for(int n = 0; n < q; n++) {
+            if((q_even > 1 && n % 2 == 0) || (q_odd > 1 && A[n % q_odd][0] == -1)) {
+                dft_translation[n] = -1;
+            }
+            else {
+                int index = 0;
+                if(even_dimension >= 1) {
+                    index += (n % 4 == 3);
+                    if(dft_dimension > 1) index *= dft_lengths[1];
+                }
+                if(even_dimension == 2) {
+                    index += B[n % q_even];
+                    if(dft_dimension > 2) index *= dft_lengths[2];
+                }
+                for(int j = 0; j < k; j++) {
+                    index += A[n % q_odd][j];
+                    if(j < k-1) index *= dft_lengths[j + even_dimension + 1];
+                }
+                dft_translation[n] = index;
+            }
+        }
+
+        dft_translation_built = true;
+    }
 };
 
 void DirichletGroup::DFTsum (complex<double> * out, complex<double> * in) {
@@ -273,254 +333,30 @@ void DirichletGroup::DFTsum (complex<double> * out, complex<double> * in) {
         return;
     }
 
-    // The easiest case is when q is an odd prime power.
-    if(q_even == 1 && k == 1) {
-        // the ordering of the character labels is not very FFT
-        // friendly, so most of the code here is going to be
-        // just to get things in the right order
-        
-        fftw_complex *a, *X;
-        a = (fftw_complex*) fftw_malloc(sizeof(fftw_complex)*(phi_q));
-        X = (fftw_complex*) fftw_malloc(sizeof(fftw_complex)*(phi_q));
-        
-        fftw_plan plan = fftw_plan_dft_1d(phi_q, a, X,
-                                          FFTW_BACKWARD, FFTW_ESTIMATE);
+    build_dft_translation();
 
-        long g = generators->at(0);
-        long z = 1;
+    complex<double> *a, *X;
+    a = new complex<double>[phi_q];
+    X = new complex<double>[phi_q];
 
-        // translate in one direction
-        for(int k = 0; k < phi_q; k++) {
-            //a[k] = in[z];
-            a[k][0] = in[z].real();
-            a[k][1] = in[z].imag();
-            z = z * g;
-            z = z % q;
-        }
 
-        fftw_execute(plan);
-
-        // translate back
-        z = 1;
-        out[0] = 0.0;
-        for(int k = 0; k < phi_q; k++) {
-            out[z] = complex<double>(X[k][0], X[k][1]);
-            z = z * g;
-            z = z % q;
-        }
-        fftw_destroy_plan(plan);
-        fftw_free(a);
-        fftw_free(X);
+    for(int n = 0; n < q; n++) {
+        if(dft_translation[n] == -1) continue;
+        else a[dft_translation[n]] = in[n];
     }
-    else if(q_even == 1) {
-        complex<double> *a, *X;
-        a = new complex<double>[phi_q];
-        X = new complex<double>[phi_q];
 
-        int * phi = new int[k];
-        for(int n = 0; n < k; n++) {
-            long p = primes->at(n);
-            long e = exponents->at(n);
-            phi[n] = (p - 1)*pow(p, e-1);
-        }
+    fftw_plan plan = fftw_plan_dft(dft_dimension, dft_lengths,
+                                        (fftw_complex *)a,
+                                        (fftw_complex *)X,
+                                        FFTW_BACKWARD, FFTW_ESTIMATE);
 
-        int * translation = new int[q];
-        //          m == g[j]**A[m][k] mod p[j]**e[j]
-        for(int n = 0; n < q; n++) {
-            if(A[n][0] == -1) {
-                translation[n] = -1;
-            }
-            else {
-                int index = 0;
-                for(int j = 0; j < k; j++) {
-                    index += A[n][j];
-                    if(j < k-1) index *= phi[j+1];
-                }
-                translation[n] = index;
-            }
-        }
-
-        for(int n = 0; n < q; n++) {
-            if(translation[n] == -1) continue;
-            else a[translation[n]] = in[n];
-        }
-        
-        fftw_plan plan = fftw_plan_dft(k, phi, (fftw_complex *)a,
-                                               (fftw_complex *)X,
-                                       FFTW_BACKWARD, FFTW_ESTIMATE);
-        
-        fftw_execute(plan);
-
-        for(int n = 0; n < q; n++) {
-            if(translation[n] == -1) out[n] = 0.0;
-            else out[n] = X[translation[n]];
-        }
-
-        fftw_destroy_plan(plan);
-        delete [] translation;
-        delete [] phi;
-        delete [] a;
-        delete [] X;
+    fftw_execute(plan);
+    for(int n = 0; n < q; n++) {
+        if(dft_translation[n] == -1) out[n] = 0.0;
+        else out[n] = X[dft_translation[n]];
     }
-    else if(q_even == 2) {
-        complex<double> *a, *X;
-        a = new complex<double>[phi_q];
-        X = new complex<double>[phi_q];
 
-        int * phi = new int[k];
-        for(int n = 0; n < k; n++) {
-            long p = primes->at(n);
-            long e = exponents->at(n);
-            phi[n] = (p - 1)*pow(p, e-1);
-        }
-
-        int * translation = new int[q];
-        //          m == g[j]**A[m][k] mod p[j]**e[j]
-        for(int n = 0; n < q; n++) {
-            if(n % 2 == 0 || A[n % q_odd][0] == -1) {
-                translation[n] = -1;
-            }
-            else {
-                int index = 0;
-                for(int j = 0; j < k; j++) {
-                    index += A[n % q_odd][j];
-                    if(j < k-1) index *= phi[j+1];
-                }
-                translation[n] = index;
-            }
-        }
-
-        for(int n = 0; n < q; n++) {
-            if(translation[n] == -1) continue;
-            else a[translation[n]] = in[n];
-        }
-        
-        fftw_plan plan = fftw_plan_dft(k, phi, (fftw_complex *)a,
-                                               (fftw_complex *)X,
-                                       FFTW_BACKWARD, FFTW_ESTIMATE);
-        
-        fftw_execute(plan);
-
-        for(int n = 0; n < q; n++) {
-            if(translation[n] == -1) out[n] = 0.0;
-            else out[n] = X[translation[n]];
-        }
-
-        fftw_destroy_plan(plan);
-        delete [] translation;
-        delete [] phi;
-        delete [] a;
-        delete [] X;
-    }
-    else if(q_even == 4) {
-        complex<double> *a, *X;
-        a = new complex<double>[phi_q];
-        X = new complex<double>[phi_q];
-
-        int * phi = new int[k+1];
-        phi[0] = 2;
-        for(int n = 0; n < k; n++) {
-            long p = primes->at(n);
-            long e = exponents->at(n);
-            phi[n+1] = (p - 1)*pow(p, e-1);
-        }
-
-        int * translation = new int[q];
-        //          m == g[j]**A[m][k] mod p[j]**e[j]
-        for(int n = 0; n < q; n++) {
-            if(n % 2 == 0 || (q_odd > 1 && A[n % q_odd][0] == -1)) {
-                translation[n] = -1;
-            }
-            else {
-                int index = (n % 4 == 3);
-                if(k > 0) index *= phi[1];
-                for(int j = 0; j < k; j++) {
-                    index += A[n % q_odd][j];
-                    if(j < k-1) index *= phi[j+2];
-                }
-                translation[n] = index;
-            }
-        }
-
-        for(int n = 0; n < q; n++) {
-            if(translation[n] == -1) continue;
-            else a[translation[n]] = in[n];
-        }
-
-        fftw_plan plan = fftw_plan_dft(k+1, phi, (fftw_complex *)a,
-                                                 (fftw_complex *)X,
-                                                 FFTW_BACKWARD, FFTW_ESTIMATE);
-        
-        fftw_execute(plan);
-
-        for(int n = 0; n < q; n++) {
-            if(translation[n] == -1) out[n] = 0.0;
-            else out[n] = X[translation[n]];
-        }
-        
-        fftw_destroy_plan(plan);
-        delete [] translation;
-        delete [] phi;
-        delete [] a;
-        delete [] X;
-    }
-    else { // q_even > 4
-        complex<double> *a, *X;
-        a = new complex<double>[phi_q];
-        X = new complex<double>[phi_q];
-
-        int * phi = new int[k+2];
-        phi[0] = 2;
-        phi[1] = q_even/4;
-        for(int n = 0; n < k; n++) {
-            long p = primes->at(n);
-            long e = exponents->at(n);
-            phi[n+2] = (p - 1)*pow(p, e-1);
-        }
-
-
-        int * translation = new int[q];
-        //          m == g[j]**A[m][k] mod p[j]**e[j]
-        for(int n = 0; n < q; n++) {
-            if(n % 2 == 0 || (q_odd > 1 && A[n % q_odd][0] == -1)) {
-                translation[n] = -1;
-            }
-            else {
-                int index = (n % 4 == 3) * phi[1];
-                index += B[n % q_even];
-                if(k > 0)
-                    index *= phi[2];
-                for(int j = 0; j < k; j++) {
-                    index += A[n % q_odd][j];
-                    if(j < k-1) index *= phi[j+3];
-                }
-                translation[n] = index;
-            }
-        }
-
-        for(int n = 0; n < q; n++) {
-            if(translation[n] == -1) continue;
-            else a[translation[n]] = in[n];
-        }
-
-
-        fftw_plan plan = fftw_plan_dft(k+2, phi, (fftw_complex *)a,
-                                                 (fftw_complex *)X,
-                                                 FFTW_BACKWARD, FFTW_ESTIMATE);
-        
-        fftw_execute(plan);
-
-        for(int n = 0; n < q; n++) {
-            if(translation[n] == -1) continue;
-            else out[n] = X[translation[n]];
-        }
-
-        fftw_destroy_plan(plan);
-        delete [] translation;
-        delete [] phi;
-        delete [] a;
-        delete [] X;
-    }
+    fftw_destroy_plan(plan);
 
 }
 

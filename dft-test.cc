@@ -19,8 +19,8 @@ void timesum(long qstart, long qend) {
 }
 
 int main() {
-    timesum( 1 << 14, 1 << 15);
-    int qstart = (1 << 14) - 1;
+    //timesum( 1 << 14, 1 << 15);
+    int qstart = 1;
     double maxerror = 0;
     for(int j = 0; j < 10000; j++) {
         int q = qstart + j;
@@ -54,6 +54,7 @@ int main() {
                 sums2[k] = chi.sum(q/3);
             }
         }
+        error = 0;
         for(int k = 0; k < q; k++) {
             error = max(error, abs(sums1[k] - sums2[k]));
         }
