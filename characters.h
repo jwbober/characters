@@ -7,6 +7,8 @@
 
 using namespace std;
 
+#include "mpfi_fft.h"
+
 inline std::complex<double> e(double z) {
     std::complex<double>twopii(0,2*M_PI);
     return std::exp(twopii * z);
@@ -74,6 +76,7 @@ public:
     std::complex<double> * zeta_powers_even;     // zeta_powers[n] == e(n/phi(q))
  
     void DFTsum(std::complex<double> * out, std::complex<double> * in);
+    void DFTsum(mpfi_c_t * out, mpfi_c_t * in);
 
     bool is_coprime_to_q(long n) {
         if(q_even > 1 && n % 2 == 0)
@@ -119,11 +122,9 @@ public:
                 long phi = (pow(primes->at(j), exponents->at(j) - 1) * (primes->at(j) - 1));
                 PHI[j] = phi_q_odd/phi;
                 long a = 1;
-                //cout << exponents[k] << endl;
                 for(long l = 0; l < phi; l++) {
                     for(long m = a; m < q_odd; m += x) {
                         A[m][j] = l;
-                        //std::cout << m << std::endl;
                     }
                     a = (a * g) % x;
                 }
@@ -183,6 +184,7 @@ public:
 
         if(dft_translation_built) {
             delete [] dft_translation;
+            delete [] idft_translation;
             delete [] dft_lengths;
         }
     }
@@ -271,7 +273,28 @@ public:
         delete [] dft_in;
     }
 
+    void all_sums(mpfi_c_t * out, long end) {
+        mpfi_c_t * dft_in = new mpfi_c_t[q];
+        for(long k = 0; k < q; k++) {
+            mpfi_c_init(dft_in[k]);
+            if(k <= end) {
+                mpfi_c_set_ui(dft_in[k], 1ul, 0ul);
+            }
+            else {
+                mpfi_c_zero(dft_in[k]);
+            }
+        }
+        DFTsum(out, dft_in);
+        for(int k = 0; k < q; k++) {
+            mpfi_c_clear(dft_in[k]);
+        }
+        delete [] dft_in;
+    }
+
+
+
     int * dft_translation;
+    int * idft_translation;
     int * dft_lengths;
     int dft_dimension;
     bool dft_translation_built;
@@ -299,26 +322,48 @@ public:
         }
 
         dft_translation = new int[q];
+        idft_translation = new int[q];
+        int dlog;
         //          m == g[j]**A[m][k] mod p[j]**e[j]
         for(int n = 0; n < q; n++) {
             if((q_even > 1 && n % 2 == 0) || (q_odd > 1 && A[n % q_odd][0] == -1)) {
                 dft_translation[n] = -1;
+                idft_translation[n] = -1;
             }
             else {
-                int index = 0;
+                int dft_index = 0;
+                int idft_index = 0;
                 if(even_dimension >= 1) {
-                    index += (n % 4 == 3);
-                    if(dft_dimension > 1) index *= dft_lengths[1];
+                    idft_index += (n % 4 == 3);
+                    dft_index += (n % 4 == 3);
+                    if(dft_dimension > 1) {
+                        idft_index *= dft_lengths[1];
+                        dft_index *= dft_lengths[1];
+                    }
                 }
                 if(even_dimension == 2) {
-                    index += B[n % q_even];
-                    if(dft_dimension > 2) index *= dft_lengths[2];
+                    dlog = B[n % q_even];
+                    idft_index += dlog;
+                    if(dlog > 0)
+                        dft_index += (q_even/4 - B[n % q_even]);
+                    if(dft_dimension > 2) {
+                        idft_index *= dft_lengths[2];
+                        dft_index *= dft_lengths[2];
+                    }
                 }
                 for(int j = 0; j < k; j++) {
-                    index += A[n % q_odd][j];
-                    if(j < k-1) index *= dft_lengths[j + even_dimension + 1];
+                    dlog = A[n % q_odd][j];
+                    idft_index += dlog;
+                    if(dlog > 0)
+                        dft_index += (dft_lengths[j + even_dimension] - A[n % q_odd][j]);
+                    if(j < k-1) {
+                        idft_index *= dft_lengths[j + even_dimension + 1];
+                        dft_index *= dft_lengths[j + even_dimension + 1];
+                    }
                 }
-                dft_translation[n] = index;
+                //cout << dft_index << " " << idft_index << endl;
+                dft_translation[n] = dft_index;
+                idft_translation[n] = idft_index;
             }
         }
 
@@ -348,17 +393,69 @@ void DirichletGroup::DFTsum (complex<double> * out, complex<double> * in) {
     fftw_plan plan = fftw_plan_dft(dft_dimension, dft_lengths,
                                         (fftw_complex *)a,
                                         (fftw_complex *)X,
-                                        FFTW_BACKWARD, FFTW_ESTIMATE);
+                                        FFTW_FORWARD, FFTW_ESTIMATE);
 
     fftw_execute(plan);
     for(int n = 0; n < q; n++) {
-        if(dft_translation[n] == -1) out[n] = 0.0;
-        else out[n] = X[dft_translation[n]];
+        if(idft_translation[n] == -1) out[n] = 0.0;
+        else out[n] = X[idft_translation[n]];
     }
 
     fftw_destroy_plan(plan);
 
 }
+
+void DirichletGroup::DFTsum (mpfi_c_t * out, mpfi_c_t * in) {
+    //if(q < 4) {
+    //    // just don't want to deal with problems with 2 right now.
+    //    DFTsum_direct(out, in);
+    //    return;
+    //}
+
+    build_dft_translation();
+
+    mpfi_c_t *a;//, *X;
+    a = new mpfi_c_t[phi_q];
+    //X = new mpfi_c_t[phi_q];
+
+    for(int n = 0; n < phi_q; n++) {
+        mpfi_c_init(a[n]);
+        //mpfi_c_init(X[n]);
+    }
+
+
+    for(int n = 0; n < q; n++) {
+        // This might be inefficient.
+        // Since the mpfi_c array is really just an array of pointers,
+        // we might be able to just copy the pointers without copying
+        // the data. The fft wouldn't be operating on continuous memory, then,
+        // but it still might be better than this copy.
+        if(dft_translation[n] == -1) continue;
+        else mpfi_c_set(a[dft_translation[n]], in[n]);
+    }
+
+    unsigned long * lengths = new unsigned long[dft_dimension];
+    for(int n = 0; n < dft_dimension; n++) lengths[n] = dft_lengths[n];
+    ndft(a, phi_q, dft_dimension, lengths);
+    //fftw_plan plan = fftw_plan_dft(dft_dimension, dft_lengths,
+    //                                    (fftw_complex *)a,
+    //                                    (fftw_complex *)X,
+    //                                    FFTW_BACKWARD, FFTW_ESTIMATE);
+
+    for(int n = 0; n < q; n++) {
+        if(idft_translation[n] == -1) mpfi_c_zero(out[n]);
+        else mpfi_c_set(out[n], a[idft_translation[n]]);
+    }
+
+    for(int n = 0; n < phi_q; n++) {
+        mpfi_c_clear(a[n]);
+    }
+
+    delete [] a;
+
+}
+
+
 
 DirichletCharacter::DirichletCharacter(DirichletGroup * parent_, long m_) : parent(parent_), m(m_) {
         //
