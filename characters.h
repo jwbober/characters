@@ -75,6 +75,12 @@ public:
     std::complex<double> * zeta_powers_odd;     // zeta_powers[n] == e(n/phi(q))
     std::complex<double> * zeta_powers_even;     // zeta_powers[n] == e(n/phi(q))
  
+    mpfi_c_t * zeta_powers_odd_mpfi;
+    mpfi_c_t * zeta_powers_even_mpfi;
+
+    mpfi_c_t twopii_on_qodd;
+    mpfi_c_t twopii_on_qeven;
+
     void DFTsum(std::complex<double> * out, std::complex<double> * in);
     void DFTsum(mpfi_c_t * out, mpfi_c_t * in);
 
@@ -114,6 +120,7 @@ public:
                 A[n] = new long[k];
             }
             zeta_powers_odd = new std::complex<double>[phi_q_odd];
+            zeta_powers_odd_mpfi = new mpfi_c_t[phi_q_odd];
 
             for(long j = 0; j < k; j++) {
                 long x = pow(primes->at(j), exponents->at(j));
@@ -140,8 +147,17 @@ public:
                 }
             }
 
-            for(long n = 0; n < phi_q_odd; n++) {
+            mpfi_c_init(twopii_on_qodd);
+            mpfi_c_zero(twopii_on_qodd);
+            mpfi_const_pi(twopii_on_qodd[0].im);
+            mpfi_mul_ui(twopii_on_qodd[0].im, twopii_on_qodd[0].im, 2ul);
+            mpfi_div_ui(twopii_on_qodd[0].im, twopii_on_qodd[0].im, phi_q_odd);
+
+            for(unsigned long n = 0; n < phi_q_odd; n++) {
                 zeta_powers_odd[n] = e(n/(double)phi_q_odd);
+                mpfi_c_init(zeta_powers_odd_mpfi[n]);
+                mpfi_c_mul_ui(zeta_powers_odd_mpfi[n], twopii_on_qodd, n);
+                mpfi_c_exp(zeta_powers_odd_mpfi[n], zeta_powers_odd_mpfi[n]);
             }
         } // end of initialization of everything having to do
           // with q_odd
@@ -149,8 +165,19 @@ public:
         if(q_even > 4) {
             B = new long[q_even];
             zeta_powers_even = new complex<double>[q_even/4];
-            for(long n = 0; n < q_even/4; n++) {
+            zeta_powers_even_mpfi = new mpfi_c_t[q_even/4];
+
+            mpfi_c_init(twopii_on_qeven);
+            mpfi_c_zero(twopii_on_qeven);
+            mpfi_const_pi(twopii_on_qeven[0].im);
+            mpfi_mul_ui(twopii_on_qeven[0].im, twopii_on_qeven[0].im, 2ul);
+            mpfi_div_ui(twopii_on_qeven[0].im, twopii_on_qeven[0].im, q_even/4);
+
+            for(unsigned long n = 0; n < q_even/4; n++) {
                 zeta_powers_even[n] = e(4*n/double(q_even));
+                mpfi_c_init(zeta_powers_even_mpfi[n]);
+                mpfi_c_mul_ui(zeta_powers_even_mpfi[n], twopii_on_qeven, n);
+                mpfi_c_exp(zeta_powers_even_mpfi[n], zeta_powers_even_mpfi[n]);
             }
             long pow_five = 1;
             for(long e = 0; e < q_even/4; e++) {
@@ -171,6 +198,11 @@ public:
             for(int n = 0; n < q_odd; n++) {
                 delete [] A[n];
             }
+            for(int n = 0; n < phi_q_odd; n++) {
+                mpfi_c_clear(zeta_powers_odd_mpfi[n]);
+            }
+            delete [] zeta_powers_odd_mpfi;
+            mpfi_c_clear(twopii_on_qodd);
             delete [] A;
             delete [] PHI;
             delete primes;
@@ -180,6 +212,11 @@ public:
         if(q_even > 4) {
             delete [] B;
             delete [] zeta_powers_even;
+            for(int n = 0; n < q_even/4; n++) {
+                mpfi_c_clear(zeta_powers_even_mpfi[n]);
+            }
+            delete [] zeta_powers_even_mpfi;
+            mpfi_c_clear(twopii_on_qeven);
         }
 
         if(dft_translation_built) {
@@ -241,6 +278,43 @@ public:
         return odd_part * even_part;
     }
 
+    void chi(mpfi_c_t out, long m, long n) {
+        complex<double> odd_part = 1.0;
+        if(q_even > 1) {
+            if(m % 2 == 0 || n % 2 == 0) {
+                mpfi_c_zero(out);
+                return;
+            }
+            else if(q_even == 2) {
+                mpfi_c_set_ui(out, 1, 0);
+            }
+            else if(q_even == 4) {
+                if(m % 4 == 3 && n % 4 == 3) {
+                    mpfi_set_si(out[0].re, -1);
+                    mpfi_set_si(out[0].im, 0);
+                }
+                else {
+                    mpfi_c_set_ui(out, 1, 0);
+                }
+            }
+            else {
+                    mpfi_c_set(out, zeta_powers_even_mpfi[chi_even_exponent(m % q_even, n % q_even)]);
+            }
+        }
+        else mpfi_c_set_ui(out, 1, 0);
+
+        if(m >= q_odd)
+            m %= q_odd;
+        if(n >= q_odd);
+            n %= q_odd;
+        if(q_odd > 1) {
+            if(A[m][0] == -1 || A[n][0] == -1)
+                mpfi_c_zero(out);
+            else
+                mpfi_c_mul(out, out, zeta_powers_odd_mpfi[chi_odd_exponent(m, n)]);
+        }
+    }
+
     DirichletCharacter character(long m) {
         return DirichletCharacter(this, m);
     }
@@ -262,6 +336,27 @@ public:
             }
             out[n] = S;
         }
+    }
+
+    void DFTsum_direct (mpfi_c_t * out, unsigned long * in) {
+        mpfi_c_t x, y;
+        mpfi_c_init(x);
+        mpfi_c_init(y);
+
+        for(int n = 0; n < q; n++) {
+            mpfi_c_zero(out[n]);
+            if(!is_coprime_to_q(n)) continue;
+            for(int k = 0; k < q; k++) {
+                if(!is_coprime_to_q(k)) continue;
+                chi(y, n, k);
+                //cout << endl;
+                mpfi_c_mul_ui(x, y, in[k]);
+                mpfi_c_add(out[n], out[n], x);
+            }
+        }
+
+        mpfi_c_clear(x);
+        mpfi_c_clear(y);
     }
 
     void all_sums(complex<double> * out, long end) {
@@ -299,8 +394,13 @@ public:
     int dft_dimension;
     bool dft_translation_built;
 
-    void build_dft_translation() {
-        if(dft_translation_built) return;
+    void build_dft_translation(bool force=false) {
+        if(dft_translation_built && !force) return;
+        if(dft_translation_built && force) {
+            delete [] dft_translation;
+            delete [] idft_translation;
+            delete [] dft_lengths;
+        }
 
         int even_dimension;
         if(q_even <= 2)      even_dimension = 0;
